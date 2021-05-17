@@ -71,7 +71,7 @@ type CgroupMetric struct {
 	memswFailCount  float64
 	userslice       bool
 	job             bool
-	uid             string
+	uid             int
 	username        string
 	jobid           string
 	processExec     map[string]float64
@@ -80,6 +80,7 @@ type CgroupMetric struct {
 
 type Exporter struct {
 	paths           []string
+	uid             *prometheus.Desc
 	collectError    *prometheus.Desc
 	cpuUser         *prometheus.Desc
 	cpuSystem       *prometheus.Desc
@@ -178,16 +179,18 @@ func parseCpuSet(cpuset string) ([]string, error) {
 }
 
 func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
+	var err error
 	pathBase := filepath.Base(name)
 	userSlicePattern := regexp.MustCompile("^user-([0-9]+).slice$")
 	userSliceMatch := userSlicePattern.FindStringSubmatch(pathBase)
 	if len(userSliceMatch) == 2 {
 		metric.userslice = true
-		metric.uid = userSliceMatch[1]
-		user, err := user.LookupId(metric.uid)
+		metric.uid, err = strconv.Atoi(userSliceMatch[1])
 		if err != nil {
-			level.Error(logger).Log("msg", "Error looking up user slice uid", "uid", metric.uid, "err", err)
-		} else {
+			level.Error(logger).Log("msg", "Error getting slurm uid number", "uid", pathBase, "err", err)
+		}
+		user, err := user.LookupId(userSliceMatch[1])
+		if err == nil {
 			metric.username = user.Username
 		}
 		return
@@ -196,12 +199,13 @@ func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
 	slurmMatch := slurmPattern.FindStringSubmatch(name)
 	if len(slurmMatch) == 3 {
 		metric.job = true
-		metric.uid = slurmMatch[1]
-		metric.jobid = slurmMatch[2]
-		user, err := user.LookupId(metric.uid)
+		metric.uid, err = strconv.Atoi(slurmMatch[1])
 		if err != nil {
-			level.Error(logger).Log("msg", "Error looking up slurm uid", "uid", metric.uid, "err", err)
-		} else {
+			level.Error(logger).Log("msg", "Error getting slurm uid number", "uid", name, "err", err)
+		}
+		metric.jobid = slurmMatch[2]
+		user, err := user.LookupId(slurmMatch[1])
+		if err == nil {
 			metric.username = user.Username
 		}
 		return
@@ -280,38 +284,38 @@ func getName(p cgroups.Process, path string, logger log.Logger) (string, error) 
 func NewExporter(paths []string, logger log.Logger) *Exporter {
 	return &Exporter{
 		paths: paths,
+		uid: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "uid"),
+			"Uid number of user running this job", []string{"jobid"}, nil),
 		cpuUser: prometheus.NewDesc(prometheus.BuildFQName(namespace, "cpu", "user_seconds"),
-			"Cumalitive CPU user seconds for cgroup", []string{"cgroup"}, nil),
+			"Cumalitive CPU user seconds for jobid", []string{"jobid"}, nil),
 		cpuSystem: prometheus.NewDesc(prometheus.BuildFQName(namespace, "cpu", "system_seconds"),
-			"Cumalitive CPU system seconds for cgroup", []string{"cgroup"}, nil),
+			"Cumalitive CPU system seconds for jobid", []string{"jobid"}, nil),
 		cpuTotal: prometheus.NewDesc(prometheus.BuildFQName(namespace, "cpu", "total_seconds"),
-			"Cumalitive CPU total seconds for cgroup", []string{"cgroup"}, nil),
+			"Cumalitive CPU total seconds for jobid", []string{"jobid"}, nil),
 		cpus: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "cpus"),
-			"Number of CPUs in the cgroup", []string{"cgroup"}, nil),
+			"Number of CPUs in the jobid", []string{"jobid"}, nil),
 		cpu_info: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "cpu_info"),
-			"Information about the cgroup CPUs", []string{"cgroup", "cpus"}, nil),
+			"Information about the jobid CPUs", []string{"jobid", "cpus"}, nil),
 		memoryRSS: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "rss_bytes"),
-			"Memory RSS used in bytes", []string{"cgroup"}, nil),
+			"Memory RSS used in bytes", []string{"jobid"}, nil),
 		memoryCache: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "cache_bytes"),
-			"Memory cache used in bytes", []string{"cgroup"}, nil),
+			"Memory cache used in bytes", []string{"jobid"}, nil),
 		memoryUsed: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "used_bytes"),
-			"Memory used in bytes", []string{"cgroup"}, nil),
+			"Memory used in bytes", []string{"jobid"}, nil),
 		memoryTotal: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "total_bytes"),
-			"Memory total given to cgroup in bytes", []string{"cgroup"}, nil),
+			"Memory total given to jobid in bytes", []string{"jobid"}, nil),
 		memoryFailCount: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "fail_count"),
-			"Memory fail count", []string{"cgroup"}, nil),
+			"Memory fail count", []string{"jobid"}, nil),
 		memswUsed: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memsw", "used_bytes"),
-			"Swap used in bytes", []string{"cgroup"}, nil),
+			"Swap used in bytes", []string{"jobid"}, nil),
 		memswTotal: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memsw", "total_bytes"),
-			"Swap total given to cgroup in bytes", []string{"cgroup"}, nil),
+			"Swap total given to jobid in bytes", []string{"jobid"}, nil),
 		memswFailCount: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memsw", "fail_count"),
-			"Swap fail count", []string{"cgroup"}, nil),
-		info: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "info"),
-			"User slice information", []string{"cgroup", "username", "uid", "jobid"}, nil),
+			"Swap fail count", []string{"jobid"}, nil),
 		processExec: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "process_exec_count"),
-			"Count of instances of a given process", []string{"cgroup", "exec"}, nil),
+			"Count of instances of a given process", []string{"jobid", "exec"}, nil),
 		collectError: prometheus.NewDesc(prometheus.BuildFQName(namespace, "exporter", "collect_error"),
-			"Indicates collection error, 0=no error, 1=error", []string{"cgroup"}, nil),
+			"Indicates collection error, 0=no error, 1=error", []string{"jobid"}, nil),
 		logger: logger,
 	}
 }
@@ -425,7 +429,6 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.memswUsed
 	ch <- e.memswTotal
 	ch <- e.memswFailCount
-	ch <- e.info
 	if *collectProc {
 		ch <- e.processExec
 	}
@@ -437,25 +440,23 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		if m.err {
 			ch <- prometheus.MustNewConstMetric(e.collectError, prometheus.GaugeValue, 1, m.name)
 		}
-		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.name)
-		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.name)
-		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.GaugeValue, m.cpuTotal, m.name)
-		ch <- prometheus.MustNewConstMetric(e.cpus, prometheus.GaugeValue, float64(m.cpus), m.name)
-		ch <- prometheus.MustNewConstMetric(e.cpu_info, prometheus.GaugeValue, 1, m.name, m.cpu_list)
-		ch <- prometheus.MustNewConstMetric(e.memoryRSS, prometheus.GaugeValue, m.memoryRSS, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memoryCache, prometheus.GaugeValue, m.memoryCache, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memoryUsed, prometheus.GaugeValue, m.memoryUsed, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memoryTotal, prometheus.GaugeValue, m.memoryTotal, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memoryFailCount, prometheus.GaugeValue, m.memoryFailCount, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memswUsed, prometheus.GaugeValue, m.memswUsed, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memswTotal, prometheus.GaugeValue, m.memswTotal, m.name)
-		ch <- prometheus.MustNewConstMetric(e.memswFailCount, prometheus.GaugeValue, m.memswFailCount, m.name)
-		if m.userslice || m.job {
-			ch <- prometheus.MustNewConstMetric(e.info, prometheus.GaugeValue, 1, m.name, m.username, m.uid, m.jobid)
-		}
+		ch <- prometheus.MustNewConstMetric(e.uid, prometheus.GaugeValue, float64(m.uid), m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.GaugeValue, m.cpuTotal, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.cpus, prometheus.GaugeValue, float64(m.cpus), m.jobid)
+		//ch <- prometheus.MustNewConstMetric(e.cpu_info, prometheus.GaugeValue, 1, m.name, m.cpu_list)
+		ch <- prometheus.MustNewConstMetric(e.memoryRSS, prometheus.GaugeValue, m.memoryRSS, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memoryCache, prometheus.GaugeValue, m.memoryCache, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memoryUsed, prometheus.GaugeValue, m.memoryUsed, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memoryTotal, prometheus.GaugeValue, m.memoryTotal, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memoryFailCount, prometheus.GaugeValue, m.memoryFailCount, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memswUsed, prometheus.GaugeValue, m.memswUsed, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memswTotal, prometheus.GaugeValue, m.memswTotal, m.jobid)
+		ch <- prometheus.MustNewConstMetric(e.memswFailCount, prometheus.GaugeValue, m.memswFailCount, m.jobid)
 		if *collectProc {
 			for exec, count := range m.processExec {
-				ch <- prometheus.MustNewConstMetric(e.processExec, prometheus.GaugeValue, count, m.name, exec)
+				ch <- prometheus.MustNewConstMetric(e.processExec, prometheus.GaugeValue, count, m.jobid, exec)
 			}
 		}
 	}
