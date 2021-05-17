@@ -32,7 +32,6 @@ import (
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
-	"github.com/prometheus/procfs"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -42,14 +41,10 @@ const (
 
 var (
 	defCgroupRoot          = "/sys/fs/cgroup"
-	defProcRoot            = "/proc"
 	configPaths            = kingpin.Flag("config.paths", "Comma separated list of cgroup paths to check, eg /user.slice,/system.slice,/slurm").Required().String()
 	listenAddress          = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9306").String()
 	disableExporterMetrics = kingpin.Flag("web.disable-exporter-metrics", "Exclude metrics about the exporter (promhttp_*, process_*, go_*)").Default("false").Bool()
 	cgroupRoot             = kingpin.Flag("path.cgroup.root", "Root path to cgroup fs").Default(defCgroupRoot).String()
-	procRoot               = kingpin.Flag("path.proc.root", "Root path to proc fs").Default(defProcRoot).String()
-	collectProc            = kingpin.Flag("collect.proc", "Boolean that sets if to collect proc information").Default("false").Bool()
-	collectProcMaxExec     = kingpin.Flag("collect.proc.max-exec", "Max length of process executable to record").Default("100").Int()
 	collectFullSlurm       = kingpin.Flag("collect.fullslurm", "Boolean that sets if to collect all slurm steps and tasks").Default("false").Bool()
 	metricLock             = sync.RWMutex{}
 )
@@ -73,11 +68,10 @@ type CgroupMetric struct {
 	job             bool
 	uid             int
 	//	username        string
-	jobid       string
-	step        string
-	task        string
-	processExec map[string]float64
-	err         bool
+	jobid string
+	step  string
+	task  string
+	err   bool
 }
 
 type Exporter struct {
@@ -98,7 +92,6 @@ type Exporter struct {
 	memswTotal      *prometheus.Desc
 	memswFailCount  *prometheus.Desc
 	info            *prometheus.Desc
-	processExec     *prometheus.Desc
 	logger          log.Logger
 }
 
@@ -225,72 +218,6 @@ func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
 	}
 }
 
-func getProcInfo(pids []int, metric *CgroupMetric, logger log.Logger) {
-	executables := make(map[string]float64)
-	procFS, err := procfs.NewFS(*procRoot)
-	if err != nil {
-		level.Error(logger).Log("msg", "Unable to open procfs", "path", *procRoot)
-		return
-	}
-	wg := &sync.WaitGroup{}
-	wg.Add(len(pids))
-	for _, pid := range pids {
-		go func(p int) {
-			proc, err := procFS.Proc(p)
-			if err != nil {
-				level.Error(logger).Log("msg", "Unable to read PID", "pid", p)
-				wg.Done()
-				return
-			}
-			executable, err := proc.Executable()
-			if err != nil {
-				level.Error(logger).Log("msg", "Unable to get executable for PID", "pid", p)
-				wg.Done()
-				return
-			}
-			if len(executable) > *collectProcMaxExec {
-				level.Debug(logger).Log("msg", "Executable will be truncated", "executable", executable, "len", len(executable), "pid", p)
-				executable = executable[len(executable)-*collectProcMaxExec:]
-				executable = fmt.Sprintf("...%s", executable)
-			}
-			metricLock.Lock()
-			executables[executable] += 1
-			metricLock.Unlock()
-			wg.Done()
-		}(pid)
-	}
-	wg.Wait()
-	metric.processExec = executables
-}
-
-func getName(p cgroups.Process, path string, logger log.Logger) (string, string, string, error) {
-	cpuacctPath := filepath.Join(*cgroupRoot, "cpuacct")
-	name := strings.TrimPrefix(p.Path, cpuacctPath)
-	name = strings.TrimSuffix(name, "/")
-	dirs := strings.Split(name, "/")
-	level.Debug(logger).Log("msg", "cgroup name", "dirs", fmt.Sprintf("%v", dirs))
-	// Handle user.slice, system.slice and torque
-	if len(dirs) == 3 {
-		return name, "", "", nil
-	}
-	// Handle deeper cgroup where we want higher level, mainly SLURM
-	var keepDirs []string
-	for i, d := range dirs {
-		if strings.HasPrefix(d, "job_") {
-			keepDirs = dirs[0 : i+1]
-			break
-		}
-	}
-	if keepDirs == nil {
-		return name, "", "", nil
-	}
-	name = strings.Join(keepDirs, "/")
-	fulldetails := strings.Join(dirs, "/")
-	step := strings.Join(dirs[0:len(dirs)-1], "/")
-	level.Debug(logger).Log("msg", "cgroup name returning", "name", name, "fulldetails", fulldetails, "step", step)
-	return name, fulldetails, step, nil
-}
-
 func NewExporter(paths []string, logger log.Logger) *Exporter {
 	return &Exporter{
 		paths: paths,
@@ -322,15 +249,13 @@ func NewExporter(paths []string, logger log.Logger) *Exporter {
 			"Swap total given to jobid in bytes", []string{"jobid", "step", "task"}, nil),
 		memswFailCount: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memsw", "fail_count"),
 			"Swap fail count", []string{"jobid", "step", "task"}, nil),
-		processExec: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "process_exec_count"),
-			"Count of instances of a given process", []string{"jobid", "step", "task", "exec"}, nil),
 		collectError: prometheus.NewDesc(prometheus.BuildFQName(namespace, "exporter", "collect_error"),
 			"Indicates collection error, 0=no error, 1=error", []string{"jobid", "step", "task"}, nil),
 		logger: logger,
 	}
 }
 
-func (e *Exporter) getMetrics(name string, pids map[string][]int) (CgroupMetric, error) {
+func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 	metric := CgroupMetric{name: name}
 	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", name)
 	ctrl, err := cgroups.Load(subsystem, func(subsystem cgroups.Name) (string, error) {
@@ -358,75 +283,42 @@ func (e *Exporter) getMetrics(name string, pids map[string][]int) (CgroupMetric,
 		metric.cpu_list = strings.Join(cpus, ",")
 	}
 	getInfo(name, &metric, e.logger)
-	if *collectProc {
-		if val, ok := pids[name]; ok {
-			level.Debug(e.logger).Log("msg", "Get process info", "pids", fmt.Sprintf("%v", val))
-			getProcInfo(val, &metric, e.logger)
-		} else {
-			level.Error(e.logger).Log("msg", "Unable to get PIDs", "path", name)
-		}
-	}
 	return metric, nil
 }
 
 func (e *Exporter) collect() ([]CgroupMetric, error) {
 	var names []string
 	var metrics []CgroupMetric
+	topPath := *cgroupRoot + "/cpuacct"
 	for _, path := range e.paths {
 		level.Debug(e.logger).Log("msg", "Loading cgroup", "path", path)
-		control, err := cgroups.Load(subsystem, cgroups.StaticPath(path))
-		if err != nil {
-			level.Error(e.logger).Log("msg", "Error loading cgroup subsystem", "path", path, "err", err)
-			metric := CgroupMetric{name: path, err: true}
-			metrics = append(metrics, metric)
-			continue
-		}
-		processes, err := control.Processes(cgroups.Cpuacct, true)
-		if err != nil {
-			level.Error(e.logger).Log("msg", "Error loading cgroup processes", "path", path, "err", err)
-			metric := CgroupMetric{name: path, err: true}
-			metrics = append(metrics, metric)
-			continue
-		}
-		level.Debug(e.logger).Log("msg", "Found processes", "processes", len(processes))
-		pids := make(map[string][]int)
-		for _, p := range processes {
-			level.Debug(e.logger).Log("msg", "Get Name", "process", p.Path, "pid", p.Pid, "path", path)
-			name, details, step, err := getName(p, path, e.logger)
+		err := filepath.Walk(topPath+path, func(p string, info os.FileInfo, err error) error {
 			if err != nil {
-				level.Error(e.logger).Log("msg", "Error getting cgroup name for process", "process", p.Path, "path", path, "err", err)
-				continue
+				return err
 			}
-			if !sliceContains(names, name) {
-				names = append(names, name)
+			if info.IsDir() && strings.Contains(p, "/job_") {
+				rel, _ := filepath.Rel(topPath, p)
+				level.Debug(e.logger).Log("msg", "Get Name", "name", p, "rel", rel)
+				names = append(names, "/"+rel)
 			}
-			if *collectFullSlurm {
-				if details != "" && !sliceContains(names, details) {
-					names = append(names, details)
-				}
-				if step != "" && !sliceContains(names, step) {
-					names = append(names, step)
-				}
-			}
-			if val, ok := pids[name]; ok {
-				if !sliceContains(val, p.Pid) {
-					val = append(val, p.Pid)
-				}
-				pids[name] = val
-			} else {
-				pids[name] = []int{p.Pid}
-			}
+			return nil
+		})
+		if err != nil {
+			level.Error(e.logger).Log("msg", "Error walking cgroup subsystem", "path", path, "err", err)
+			metric := CgroupMetric{name: path, err: true}
+			metrics = append(metrics, metric)
+			continue
 		}
 		wg := &sync.WaitGroup{}
 		wg.Add(len(names))
 		for _, name := range names {
-			go func(n string, p map[string][]int) {
-				metric, _ := e.getMetrics(n, p)
+			go func(n string) {
+				metric, _ := e.getMetrics(n)
 				metricLock.Lock()
 				metrics = append(metrics, metric)
 				metricLock.Unlock()
 				wg.Done()
-			}(name, pids)
+			}(name)
 		}
 		wg.Wait()
 	}
@@ -447,9 +339,6 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.memswUsed
 	ch <- e.memswTotal
 	ch <- e.memswFailCount
-	if *collectProc {
-		ch <- e.processExec
-	}
 }
 
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
@@ -474,11 +363,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(e.memswUsed, prometheus.GaugeValue, m.memswUsed, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memswTotal, prometheus.GaugeValue, m.memswTotal, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memswFailCount, prometheus.GaugeValue, m.memswFailCount, m.jobid, m.step, m.task)
-		if *collectProc {
-			for exec, count := range m.processExec {
-				ch <- prometheus.MustNewConstMetric(e.processExec, prometheus.GaugeValue, count, m.jobid, m.step, m.task, exec)
-			}
-		}
 	}
 }
 
