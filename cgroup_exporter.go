@@ -286,9 +286,9 @@ func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 	return metric, nil
 }
 
-func (e *Exporter) collect() ([]CgroupMetric, error) {
+func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 	var names []string
-	var metrics []CgroupMetric
+	var metrics = make(map[string]CgroupMetric)
 	topPath := *cgroupRoot + "/cpuacct"
 	for _, path := range e.paths {
 		level.Debug(e.logger).Log("msg", "Loading cgroup", "path", path)
@@ -297,6 +297,9 @@ func (e *Exporter) collect() ([]CgroupMetric, error) {
 				return err
 			}
 			if info.IsDir() && strings.Contains(p, "/job_") {
+				if !*collectFullSlurm && strings.Contains(p, "/step_") {
+					return nil
+				}
 				rel, _ := filepath.Rel(topPath, p)
 				level.Debug(e.logger).Log("msg", "Get Name", "name", p, "rel", rel)
 				names = append(names, "/"+rel)
@@ -306,7 +309,7 @@ func (e *Exporter) collect() ([]CgroupMetric, error) {
 		if err != nil {
 			level.Error(e.logger).Log("msg", "Error walking cgroup subsystem", "path", path, "err", err)
 			metric := CgroupMetric{name: path, err: true}
-			metrics = append(metrics, metric)
+			metrics[path] = metric
 			continue
 		}
 		wg := &sync.WaitGroup{}
@@ -315,7 +318,7 @@ func (e *Exporter) collect() ([]CgroupMetric, error) {
 			go func(n string) {
 				metric, _ := e.getMetrics(n)
 				metricLock.Lock()
-				metrics = append(metrics, metric)
+				metrics[n] = metric
 				metricLock.Unlock()
 				wg.Done()
 			}(name)
@@ -343,7 +346,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	metrics, _ := e.collect()
-	for _, m := range metrics {
+	for n, m := range metrics {
 		if m.err {
 			ch <- prometheus.MustNewConstMetric(e.collectError, prometheus.GaugeValue, 1, m.name)
 		}
@@ -353,7 +356,15 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.GaugeValue, m.cpuTotal, m.jobid, m.step, m.task)
-		ch <- prometheus.MustNewConstMetric(e.cpus, prometheus.GaugeValue, float64(m.cpus), m.jobid, m.step, m.task)
+		cpus := m.cpus
+		if cpus == 0 {
+			dir := filepath.Dir(n)
+			cpus = metrics[dir].cpus
+			if cpus == 0 {
+				cpus = metrics[filepath.Dir(dir)].cpus
+			}
+		}
+		ch <- prometheus.MustNewConstMetric(e.cpus, prometheus.GaugeValue, float64(cpus), m.jobid, m.step, m.task)
 		//ch <- prometheus.MustNewConstMetric(e.cpu_info, prometheus.GaugeValue, 1, m.name, m.cpu_list, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryRSS, prometheus.GaugeValue, m.memoryRSS, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryCache, prometheus.GaugeValue, m.memoryCache, m.jobid, m.step, m.task)
