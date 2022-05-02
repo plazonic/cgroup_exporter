@@ -308,8 +308,8 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 		})
 		if err != nil {
 			level.Error(e.logger).Log("msg", "Error walking cgroup subsystem", "path", path, "err", err)
-			metric := CgroupMetric{name: path, err: true}
-			metrics[path] = metric
+			//metric := CgroupMetric{name: path, err: true}
+			//metrics[path] = metric
 			continue
 		}
 		wg := &sync.WaitGroup{}

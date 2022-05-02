@@ -1,0 +1,3 @@
+CGO_ENABLED=0 go build ; strip ./cgroup_exporter ; scp ./cgroup_exporter tiger2-nfs:/home/plazonic/
+GOARCH=ppc64le CGO_ENABLED=0 go build
+
