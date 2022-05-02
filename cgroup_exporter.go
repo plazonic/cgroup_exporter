@@ -257,6 +257,7 @@ func NewExporter(paths []string, logger log.Logger) *Exporter {
 
 func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 	metric := CgroupMetric{name: name}
+	metric.err = false
 	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", name)
 	ctrl, err := cgroups.Load(subsystem, func(subsystem cgroups.Name) (string, error) {
 		return name, nil
@@ -267,6 +268,16 @@ func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 		return metric, err
 	}
 	stats, _ := ctrl.Stat(cgroups.IgnoreNotExist)
+	if stats.CPU == nil {
+		level.Error(e.logger).Log("msg", "Failed to load CPU cgroup", "path", name)
+		metric.err = true
+		return metric, nil
+	}
+	if stats.Memory == nil {
+		level.Error(e.logger).Log("msg", "Failed to load memory cgroup", "path", name)
+		metric.err = true
+		return metric, nil
+	}
 	metric.cpuUser = float64(stats.CPU.Usage.User) / 1000000000.0
 	metric.cpuSystem = float64(stats.CPU.Usage.Kernel) / 1000000000.0
 	metric.cpuTotal = float64(stats.CPU.Usage.Total) / 1000000000.0
@@ -317,9 +328,11 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 		for _, name := range names {
 			go func(n string) {
 				metric, _ := e.getMetrics(n)
-				metricLock.Lock()
-				metrics[n] = metric
-				metricLock.Unlock()
+				if !metric.err {
+					metricLock.Lock()
+					metrics[n] = metric
+					metricLock.Unlock()
+				}
 				wg.Done()
 			}(name)
 		}
