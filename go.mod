@@ -1,14 +1,30 @@
-module github.com/treydock/cgroup_exporter
+module github.com/plazonic/cgroup_exporter
 
-go 1.16
+go 1.20
 
 require (
-	github.com/alecthomas/units v0.0.0-20210208195552-ff826a37aa15 // indirect
-	github.com/containerd/cgroups v1.0.3
-	github.com/go-kit/kit v0.10.0
-	github.com/golang/protobuf v1.5.2 // indirect
-	github.com/prometheus/client_golang v1.10.0
-	github.com/prometheus/common v0.21.0
-	github.com/prometheus/procfs v0.6.0
-	gopkg.in/alecthomas/kingpin.v2 v2.2.6
+	github.com/alecthomas/kingpin/v2 v2.3.2
+	github.com/containerd/cgroups v1.1.0
+	github.com/go-kit/log v0.2.1
+	github.com/prometheus/client_golang v1.15.1
+	github.com/prometheus/common v0.43.0
+)
+
+require (
+	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
+	github.com/docker/go-units v0.5.0 // indirect
+	github.com/go-logfmt/logfmt v0.6.0 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+	github.com/opencontainers/runtime-spec v1.0.2 // indirect
+	github.com/prometheus/client_model v0.4.0 // indirect
+	github.com/prometheus/procfs v0.9.0 // indirect
+	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
+	golang.org/x/sys v0.8.0 // indirect
+	google.golang.org/protobuf v1.30.0 // indirect
 )

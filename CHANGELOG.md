@@ -1,3 +1,29 @@
+## 0.9.1 / 2023-05-12
+
+### Changes
+
+* [BUGFIX] Avoid possible nil pointer errors (#24)
+
+## 0.9.0 / 2023-05-06
+
+### Changes
+
+* [CHANGE] Trim exec path in middle (#22)
+* [ENHANCEMENT] Update to Go 1.20 and update Go module dependencies (#23)
+
+## 0.8.1 / 2022-11-15
+
+### Changes
+
+* [BUGFIX] Avoid null references during what appears to be race condition (#21)
+
+## 0.8.0 / 2022-03-08
+
+### Changes
+
+* [ENHANCEMENT] Update Go to 1.17
+* [ENHANCEMENT] Update Go module dependencies
+
 ## 0.7.0 / 2021-04-23
 
 ### Changes

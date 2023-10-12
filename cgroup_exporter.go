@@ -24,15 +24,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/containerd/cgroups"
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
-	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 const (
@@ -267,28 +267,36 @@ func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 		metric.err = true
 		return metric, err
 	}
-	stats, _ := ctrl.Stat(cgroups.IgnoreNotExist)
-	if stats.CPU == nil {
-		level.Error(e.logger).Log("msg", "Failed to load CPU cgroup", "path", name)
-		metric.err = true
-		return metric, nil
+	stats, err := ctrl.Stat(cgroups.IgnoreNotExist)
+	if err != nil {
+		level.Error(e.logger).Log("msg", "Failed to stat cgroups", "path", name, "err", err)
+		return metric, err
 	}
-	if stats.Memory == nil {
-		level.Error(e.logger).Log("msg", "Failed to load memory cgroup", "path", name)
-		metric.err = true
-		return metric, nil
+	if stats == nil {
+		level.Error(e.logger).Log("msg", "Cgroup stats are nil", "path", name)
+		return metric, err
 	}
-	metric.cpuUser = float64(stats.CPU.Usage.User) / 1000000000.0
-	metric.cpuSystem = float64(stats.CPU.Usage.Kernel) / 1000000000.0
-	metric.cpuTotal = float64(stats.CPU.Usage.Total) / 1000000000.0
-	metric.memoryRSS = float64(stats.Memory.TotalRSS)
-	metric.memoryCache = float64(stats.Memory.TotalCache)
-	metric.memoryUsed = float64(stats.Memory.Usage.Usage)
-	metric.memoryTotal = float64(stats.Memory.Usage.Limit)
-	metric.memoryFailCount = float64(stats.Memory.Usage.Failcnt)
-	metric.memswUsed = float64(stats.Memory.Swap.Usage)
-	metric.memswTotal = float64(stats.Memory.Swap.Limit)
-	metric.memswFailCount = float64(stats.Memory.Swap.Failcnt)
+	if stats.CPU != nil {
+		if stats.CPU.Usage != nil {
+			metric.cpuUser = float64(stats.CPU.Usage.User) / 1000000000.0
+			metric.cpuSystem = float64(stats.CPU.Usage.Kernel) / 1000000000.0
+			metric.cpuTotal = float64(stats.CPU.Usage.Total) / 1000000000.0
+		}
+	}
+	if stats.Memory != nil {
+		metric.memoryRSS = float64(stats.Memory.TotalRSS)
+		metric.memoryCache = float64(stats.Memory.TotalCache)
+		if stats.Memory.Usage != nil {
+			metric.memoryUsed = float64(stats.Memory.Usage.Usage)
+			metric.memoryTotal = float64(stats.Memory.Usage.Limit)
+			metric.memoryFailCount = float64(stats.Memory.Usage.Failcnt)
+		}
+		if stats.Memory.Swap != nil {
+			metric.memswUsed = float64(stats.Memory.Swap.Usage)
+			metric.memswTotal = float64(stats.Memory.Swap.Limit)
+			metric.memswFailCount = float64(stats.Memory.Swap.Failcnt)
+		}
+	}
 	if cpus, err := getCPUs(name, e.logger); err == nil {
 		metric.cpus = len(cpus)
 		metric.cpu_list = strings.Join(cpus, ",")
@@ -398,6 +406,7 @@ func metricsHandler(logger log.Logger) http.HandlerFunc {
 
 		exporter := NewExporter(paths, logger)
 		registry.MustRegister(exporter)
+		registry.MustRegister(version.NewCollector(fmt.Sprintf("%s_exporter", namespace)))
 
 		gatherers := prometheus.Gatherers{registry}
 		if !*disableExporterMetrics {

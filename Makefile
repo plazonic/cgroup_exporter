@@ -1,6 +1,7 @@
 # Needs to be defined before including Makefile.common to auto-generate targets
-DOCKER_ARCHS ?= amd64 armv7 arm64 ppc64le
+DOCKER_ARCHS ?= amd64 arm64 ppc64le
 DOCKER_REPO	 ?= treydock
+export GOPATH ?= $(firstword $(subst :, ,$(shell go env GOPATH)))
 
 include Makefile.common
 

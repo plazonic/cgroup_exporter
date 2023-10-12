@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-kit/kit/log"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	kingpin "github.com/alecthomas/kingpin/v2"
+	"github.com/go-kit/log"
 )
 
 const (
@@ -96,15 +96,15 @@ func TestGetProcInfo(t *testing.T) {
 			t.Errorf("Expected 2 /bin/bash processes, got %v", val)
 		}
 	}
-	varLen := 4
+	varLen := 6
 	collectProcMaxExec = &varLen
 	getProcInfo([]int{95521, 95525}, &metric, logger)
-	if val, ok := metric.processExec["...bash"]; !ok {
+	if val, ok := metric.processExec["/bi...ash"]; !ok {
 		t.Errorf("Process /bin/bash not in metrics, found: %v", metric.processExec)
 		return
 	} else {
 		if val != 2 {
-			t.Errorf("Expected 2 .../bash processes, got %v", val)
+			t.Errorf("Expected 2 /b...sh processes, got %v", val)
 		}
 	}
 }
