@@ -25,7 +25,7 @@ import (
 	"sync"
 
 	"github.com/alecthomas/kingpin/v2"
-	"github.com/containerd/cgroups"
+	"github.com/containerd/cgroups/v3/cgroup1"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -113,10 +113,10 @@ func sliceContains(s interface{}, v interface{}) bool {
 	return false
 }
 
-func subsystem() ([]cgroups.Subsystem, error) {
-	s := []cgroups.Subsystem{
-		cgroups.NewCpuacct(*cgroupRoot),
-		cgroups.NewMemory(*cgroupRoot),
+func subsystem() ([]cgroup1.Subsystem, error) {
+	s := []cgroup1.Subsystem{
+		cgroup1.NewCpuacct(*cgroupRoot),
+		cgroup1.NewMemory(*cgroupRoot),
 	}
 	return s, nil
 }
@@ -259,15 +259,13 @@ func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 	metric := CgroupMetric{name: name}
 	metric.err = false
 	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", name)
-	ctrl, err := cgroups.Load(subsystem, func(subsystem cgroups.Name) (string, error) {
-		return name, nil
-	})
+	ctrl, err := cgroup1.Load(cgroup1.StaticPath("/"), cgroup1.WithHiearchy(subsystem))
 	if err != nil {
 		level.Error(e.logger).Log("msg", "Failed to load cgroups", "path", name, "err", err)
 		metric.err = true
 		return metric, err
 	}
-	stats, err := ctrl.Stat(cgroups.IgnoreNotExist)
+	stats, err := ctrl.Stat(cgroup1.IgnoreNotExist)
 	if err != nil {
 		level.Error(e.logger).Log("msg", "Failed to stat cgroups", "path", name, "err", err)
 		return metric, err
