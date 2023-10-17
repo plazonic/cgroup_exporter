@@ -26,6 +26,7 @@ import (
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/containerd/cgroups/v3/cgroup1"
+	"github.com/containerd/cgroups/v3/cgroup2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -33,6 +34,7 @@ import (
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -41,11 +43,11 @@ const (
 
 var (
 	defCgroupRoot          = "/sys/fs/cgroup"
-	configPath             = kingpin.Flag("config.path", "Cgroup path to check, eg /slurm").Default("/slurm").String()
 	listenAddress          = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9306").String()
 	disableExporterMetrics = kingpin.Flag("web.disable-exporter-metrics", "Exclude metrics about the exporter (promhttp_*, process_*, go_*)").Default("false").Bool()
 	cgroupRoot             = kingpin.Flag("path.cgroup.root", "Root path to cgroup fs").Default(defCgroupRoot).String()
 	collectFullSlurm       = kingpin.Flag("collect.fullslurm", "Boolean that sets if to collect all slurm steps and tasks").Default("false").Bool()
+	cgroupV2               = false
 	metricLock             = sync.RWMutex{}
 )
 
@@ -75,7 +77,6 @@ type CgroupMetric struct {
 }
 
 type Exporter struct {
-	path            string
 	uid             *prometheus.Desc
 	collectError    *prometheus.Desc
 	cpuUser         *prometheus.Desc
@@ -93,6 +94,7 @@ type Exporter struct {
 	memswFailCount  *prometheus.Desc
 	info            *prometheus.Desc
 	logger          log.Logger
+	getMetrics      func(log.Logger, string) (CgroupMetric, error)
 }
 
 func fileExists(filename string) bool {
@@ -121,8 +123,13 @@ func subsystem() ([]cgroup1.Subsystem, error) {
 	return s, nil
 }
 
-func getCPUs(name string, logger log.Logger) ([]string, error) {
-	cpusPath := fmt.Sprintf("%s/cpuset%s/cpuset.cpus", *cgroupRoot, name)
+func getCPUs(name string, cgroupV2 bool, logger log.Logger) ([]string, error) {
+	var cpusPath string
+	if cgroupV2 {
+		cpusPath = fmt.Sprintf("%s%s/cpuset.cpus.effective", *cgroupRoot, name)
+	} else {
+		cpusPath = fmt.Sprintf("%s/cpuset%s/cpuset.cpus", *cgroupRoot, name)
+	}
 	if !fileExists(cpusPath) {
 		return nil, nil
 	}
@@ -173,7 +180,7 @@ func parseCpuSet(cpuset string) ([]string, error) {
 	return cpus, nil
 }
 
-func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
+func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 	var err error
 	pathBase := filepath.Base(name)
 	userSlicePattern := regexp.MustCompile("^user-([0-9]+).slice$")
@@ -202,9 +209,27 @@ func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
 	}
 }
 
-func NewExporter(path string, logger log.Logger) *Exporter {
+func getInfoV2(name string, metric *CgroupMetric, logger log.Logger) {
+	// possibilities are /system.slice/slurmstepd.scope/job_211
+	//                   /system.slice/slurmstepd.scope/job_211/step_interactive
+	//                   /system.slice/slurmstepd.scope/job_211/step_extern/user/task_0
+	// we never ever get the uid
+	metric.uid = -1
+	// nor is there a userslice
+	metric.userslice = false
+	slurmPattern := regexp.MustCompile("^/system.slice/slurmstepd.scope/job_([0-9]+)(/step_([^/]+)(/user/task_([[0-9]+))?)?$")
+	slurmMatch := slurmPattern.FindStringSubmatch(name)
+	level.Debug(logger).Log("msg", "Got for match", "name", name, "len(slurmMatch)", len(slurmMatch), "slurmMatch", fmt.Sprintf("%v", slurmMatch))
+	if len(slurmMatch) == 6 {
+		metric.job = true
+		metric.jobid = slurmMatch[1]
+		metric.step = slurmMatch[3]
+		metric.task = slurmMatch[5]
+	}
+}
+
+func NewExporter(logger log.Logger, getMetrics func(log.Logger, string) (CgroupMetric, error)) *Exporter {
 	return &Exporter{
-		path: path,
 		uid: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "uid"),
 			"Uid number of user running this job", []string{"jobid"}, nil),
 		cpuUser: prometheus.NewDesc(prometheus.BuildFQName(namespace, "cpu", "user_seconds"),
@@ -235,27 +260,28 @@ func NewExporter(path string, logger log.Logger) *Exporter {
 			"Swap fail count", []string{"jobid", "step", "task"}, nil),
 		collectError: prometheus.NewDesc(prometheus.BuildFQName(namespace, "exporter", "collect_error"),
 			"Indicates collection error, 0=no error, 1=error", []string{"jobid", "step", "task"}, nil),
-		logger: logger,
+		logger:     logger,
+		getMetrics: getMetrics,
 	}
 }
 
-func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
+func getMetricsV1(logger log.Logger, name string) (CgroupMetric, error) {
 	metric := CgroupMetric{name: name}
 	metric.err = false
-	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", name)
+	level.Debug(logger).Log("msg", "Loading cgroup v1", "path", name)
 	ctrl, err := cgroup1.Load(cgroup1.StaticPath(name), cgroup1.WithHiearchy(subsystem))
 	if err != nil {
-		level.Error(e.logger).Log("msg", "Failed to load cgroups", "path", name, "err", err)
+		level.Error(logger).Log("msg", "Failed to load cgroups", "path", name, "err", err)
 		metric.err = true
 		return metric, err
 	}
 	stats, err := ctrl.Stat(cgroup1.IgnoreNotExist)
 	if err != nil {
-		level.Error(e.logger).Log("msg", "Failed to stat cgroups", "path", name, "err", err)
+		level.Error(logger).Log("msg", "Failed to stat cgroups", "path", name, "err", err)
 		return metric, err
 	}
 	if stats == nil {
-		level.Error(e.logger).Log("msg", "Cgroup stats are nil", "path", name)
+		level.Error(logger).Log("msg", "Cgroup stats are nil", "path", name)
 		return metric, err
 	}
 	if stats.CPU != nil {
@@ -279,24 +305,64 @@ func (e *Exporter) getMetrics(name string) (CgroupMetric, error) {
 			metric.memswFailCount = float64(stats.Memory.Swap.Failcnt)
 		}
 	}
-	if cpus, err := getCPUs(name, e.logger); err == nil {
+	if cpus, err := getCPUs(name, false, logger); err == nil {
 		metric.cpus = len(cpus)
 		metric.cpu_list = strings.Join(cpus, ",")
 	}
-	getInfo(name, &metric, e.logger)
+	getInfoV1(name, &metric, logger)
+	return metric, nil
+}
+
+func getMetricsV2(logger log.Logger, name string) (CgroupMetric, error) {
+	metric := CgroupMetric{name: name}
+	metric.err = false
+	level.Debug(logger).Log("msg", "Loading cgroup v2", "path", name)
+	ctrl, err := cgroup2.Load(name)
+	if err != nil {
+		level.Error(logger).Log("msg", "Failed to load cgroups", "path", name, "err", err)
+		metric.err = true
+		return metric, err
+	}
+	stats, err := ctrl.Stat()
+	if err != nil {
+		level.Error(logger).Log("msg", "Failed to stat cgroups", "path", name, "err", err)
+		return metric, err
+	}
+	if stats == nil {
+		level.Error(logger).Log("msg", "Cgroup stats are nil", "path", name)
+		return metric, err
+	}
+	if stats.CPU != nil {
+		metric.cpuUser = float64(stats.CPU.UserUsec) / 1000000.0
+		metric.cpuSystem = float64(stats.CPU.SystemUsec) / 1000000.0
+		metric.cpuTotal = float64(stats.CPU.UsageUsec) / 1000000.0
+	}
+	if cpus, err := getCPUs(name, true, logger); err == nil {
+		metric.cpus = len(cpus)
+		metric.cpu_list = strings.Join(cpus, ",")
+	}
+	getInfoV2(name, &metric, logger)
 	return metric, nil
 }
 
 func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 	var names []string
 	var metrics = make(map[string]CgroupMetric)
-	topPath := *cgroupRoot + "/cpuacct"
-	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", e.path)
-	err := filepath.Walk(topPath+e.path, func(p string, info os.FileInfo, err error) error {
+	var topPath string
+	var fullPath string
+	if cgroupV2 {
+		topPath = *cgroupRoot
+		fullPath = topPath + "/system.slice/slurmstepd.scope"
+	} else {
+		topPath = *cgroupRoot + "/cpuacct"
+		fullPath = topPath + "/slurm"
+	}
+	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", fullPath)
+	err := filepath.Walk(fullPath, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && strings.Contains(p, "/job_") {
+		if info.IsDir() && strings.Contains(p, "/job_") && !strings.HasSuffix(p, "/slurm") && !strings.HasSuffix(p, "/user") {
 			if !*collectFullSlurm && strings.Contains(p, "/step_") {
 				return nil
 			}
@@ -307,14 +373,14 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 		return nil
 	})
 	if err != nil {
-		level.Error(e.logger).Log("msg", "Error walking cgroup subsystem", "path", e.path, "err", err)
+		level.Error(e.logger).Log("msg", "Error walking cgroup subsystem", "path", fullPath, "err", err)
 		return metrics, nil
 	}
 	wg := &sync.WaitGroup{}
 	wg.Add(len(names))
 	for _, name := range names {
 		go func(n string) {
-			metric, _ := e.getMetrics(n)
+			metric, _ := e.getMetrics(e.logger, n)
 			if !metric.err {
 				metricLock.Lock()
 				metrics[n] = metric
@@ -376,12 +442,16 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-func metricsHandler(logger log.Logger) http.HandlerFunc {
+func metricsHandler(cgroupV2 bool, logger log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		registry := prometheus.NewRegistry()
 
-		exporter := NewExporter(*configPath, logger)
-		registry.MustRegister(exporter)
+		//exporter := NewExporter(logger, getMetricsV1)
+		if cgroupV2 {
+			registry.MustRegister(NewExporter(logger, getMetricsV2))
+		} else {
+			registry.MustRegister(NewExporter(logger, getMetricsV1))
+		}
 		// registry.MustRegister(version.NewCollector(fmt.Sprintf("%s_exporter", namespace)))
 
 		gatherers := prometheus.Gatherers{registry}
@@ -406,6 +476,20 @@ func main() {
 	logger := promlog.New(promlogConfig)
 	level.Info(logger).Log("msg", "Starting cgroup_exporter", "version", version.Info())
 	level.Info(logger).Log("msg", "Build context", "build_context", version.BuildContext())
+
+	var st unix.Statfs_t
+	if err := unix.Statfs(*cgroupRoot, &st); err == nil {
+		if st.Type == unix.CGROUP2_SUPER_MAGIC {
+			cgroupV2 = true
+			level.Info(logger).Log("msg", "Cgroup version v2 detected on ", "mount", cgroupRoot)
+		} else {
+			level.Info(logger).Log("msg", "Cgroup version v2 not detected, will proceed with v1.")
+		}
+	} else {
+		level.Error(logger).Log("Failed to check type of cgroup used with error", err)
+		os.Exit(1)
+	}
+
 	level.Info(logger).Log("msg", "Starting Server", "address", *listenAddress)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -418,7 +502,7 @@ func main() {
              </body>
              </html>`))
 	})
-	http.Handle(metricsEndpoint, metricsHandler(logger))
+	http.Handle(metricsEndpoint, metricsHandler(cgroupV2, logger))
 	err := http.ListenAndServe(*listenAddress, nil)
 	if err != nil {
 		level.Error(logger).Log("err", err)
