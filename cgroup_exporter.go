@@ -26,7 +26,6 @@ import (
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/containerd/cgroups/v3/cgroup1"
-	"github.com/containerd/cgroups/v3/cgroup2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -313,30 +312,78 @@ func getMetricsV1(logger log.Logger, name string) (CgroupMetric, error) {
 	return metric, nil
 }
 
+func LoadAllV2Metrics(name string) (map[string]float64, error) {
+	data := make(map[string]float64)
+	// Files to parse out of the cgroup
+	dataFetch := []string{"cpu.stat", "memory.current", "memory.events", "memory.max", "memory.stat"}
+
+	for _, fName := range dataFetch {
+		contents, err := os.ReadFile(filepath.Join(*cgroupRoot, name, fName))
+		if err != nil {
+			return data, err
+		}
+		for _, line := range strings.Split(string(contents), "\n") {
+			// Some of the above have a single value and others have a "data_name 123"
+			parts := strings.Fields(line)
+			indName := fName
+			indData := 0
+			if len(parts) == 1 || len(parts) == 2 {
+				if len(parts) == 2 {
+					indName += "." + parts[0]
+					indData = 1
+				}
+				if parts[indData] == "max" {
+					data[indName] = -1.0
+				} else {
+					f, err := strconv.ParseFloat(parts[indData], 64)
+					if err == nil {
+						data[indName] = f
+					} else {
+						return data, err
+					}
+				}
+			}
+		}
+	}
+	return data, nil
+}
+
+// Convenience function that will check if name+metric exists in the data
+// and log an error if it does not. It returns 0 in such case but otherwise
+// returns the value
+func getOneMetric(logger log.Logger, name string, metric string, required bool, data map[string]float64) float64 {
+	val, ok := data[metric]
+	if !ok && required {
+		level.Error(logger).Log("msg", "Failed to load", "metric", metric, "cgroup", name)
+	}
+	return val
+}
+
 func getMetricsV2(logger log.Logger, name string) (CgroupMetric, error) {
 	metric := CgroupMetric{name: name}
 	metric.err = false
 	level.Debug(logger).Log("msg", "Loading cgroup v2", "path", name)
-	ctrl, err := cgroup2.Load(name)
+	data, err := LoadAllV2Metrics(name)
 	if err != nil {
 		level.Error(logger).Log("msg", "Failed to load cgroups", "path", name, "err", err)
 		metric.err = true
 		return metric, err
 	}
-	stats, err := ctrl.Stat()
-	if err != nil {
-		level.Error(logger).Log("msg", "Failed to stat cgroups", "path", name, "err", err)
-		return metric, err
-	}
-	if stats == nil {
-		level.Error(logger).Log("msg", "Cgroup stats are nil", "path", name)
-		return metric, err
-	}
-	if stats.CPU != nil {
-		metric.cpuUser = float64(stats.CPU.UserUsec) / 1000000.0
-		metric.cpuSystem = float64(stats.CPU.SystemUsec) / 1000000.0
-		metric.cpuTotal = float64(stats.CPU.UsageUsec) / 1000000.0
-	}
+	metric.cpuUser = getOneMetric(logger, name, "cpu.stat.user_usec", true, data) / 1000000.0
+	metric.cpuSystem = getOneMetric(logger, name, "cpu.stat.system_usec", true, data) / 1000000.0
+	metric.cpuTotal = getOneMetric(logger, name, "cpu.stat.usage_usec", true, data) / 1000000.0
+	// we use Oom entry from memory.events - it maps most closely to FailCount
+	// TODO: add oom_kill as a separate value
+	metric.memoryFailCount = getOneMetric(logger, name, "memory.events.oom", true, data)
+	// taking Slurm's cgroup v2 as inspiration, swapcached could be missing if swap is off so OK to ignore that case
+	metric.memoryRSS = getOneMetric(logger, name, "memory.stat.anon", true, data) + getOneMetric(logger, name, "memory.stat.swapcached", false, data)
+	// I guess?
+	metric.memoryCache = getOneMetric(logger, name, "memory.stat.file", true, data)
+	metric.memoryUsed = getOneMetric(logger, name, "memory.current", true, data)
+	metric.memoryTotal = getOneMetric(logger, name, "memory.max", true, data)
+	metric.memswUsed = 0.0
+	metric.memswTotal = 0.0
+	metric.memswFailCount = 0.0
 	if cpus, err := getCPUs(name, true, logger); err == nil {
 		metric.cpus = len(cpus)
 		metric.cpu_list = strings.Join(cpus, ",")
@@ -390,6 +437,25 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 		}(name)
 	}
 	wg.Wait()
+	// if memory.max = "max" case we set memory max to -1
+	// fix it by looking at the parent
+	// we loop through names once as it was the result of Walk so top paths are seen first
+	// also some cgroups we ignore, like path=/system.slice/slurmstepd.scope/job_216/step_interactive/user, hence the need to loop through multiple parents
+	if cgroupV2 {
+		for _, name := range names {
+			metric, ok := metrics[name]
+			if ok && metric.memoryTotal < 0 {
+				for upName := name; len(upName) > 1; {
+					upName = filepath.Dir(upName)
+					upMetric, ok := metrics[upName]
+					if ok {
+						metric.memoryTotal = upMetric.memoryTotal
+						metrics[name] = metric
+					}
+				}
+			}
+		}
+	}
 	return metrics, nil
 }
 
