@@ -26,7 +26,7 @@ Clone the [repo](https://github.com/plazonic/cgroup_exporter)
 To produce the `cgroup_exporter` binaries:
 
 ```
-make build
+go build
 ```
 
 ## Process metrics
