@@ -9,36 +9,24 @@
 
 The `cgroup_exporter` produces metrics from cgroups.
 
+This version is tuned to work with slurm and is meant to be only used with cgroup v2.
+
 This exporter by default listens on port `9306` and all metrics are exposed via the `/metrics` endpoint.
 
 # Usage
 
 The `--config.paths` flag is required and must point to paths of cgroups to monitor. If there is `/sys/fs/cgroup/cpuacct/user.slice` then the value for `--config.paths` would be `/user.slice`.
 
-## Docker
-
-Example of running the Docker container
-
-```
-docker run -d -p 9306:9306 -v "/:/host:ro,rslave" treydock/cgroup_exporter --path.cgroup.root=/host/sys/fs/cgroup
-```
-
 ## Install
 
-Download the [latest release](https://github.com/treydock/cgroup_exporter/releases)
+Clone this [repo](https://github.com/plazonic/cgroup_exporter) and make sure to checkout cgroupv2 branch before building.
 
 ## Build from source
 
 To produce the `cgroup_exporter` binaries:
 
 ```
-make build
-```
-
-Or
-
-```
-go get github.com/treydock/cgroup_exporter
+go build
 ```
 
 ## Process metrics
