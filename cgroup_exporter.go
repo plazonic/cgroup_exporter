@@ -191,29 +191,43 @@ func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
 				} */
 		return
 	}
-	slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([[0-9]+))?)?$")
-	slurmMatch := slurmPattern.FindStringSubmatch(name)
-	level.Debug(logger).Log("msg", "Got for match", "name", name, "len(slurmMatch)", len(slurmMatch), "slurmMatch", fmt.Sprintf("%v", slurmMatch))
-	if len(slurmMatch) >= 3 {
-		metric.job = true
-		metric.uid, err = strconv.Atoi(slurmMatch[1])
-		if err != nil {
-			level.Error(logger).Log("msg", "Error getting slurm uid number", "uid", name, "err", err)
+	if strings.HasPrefix(name, "/slurm") {
+		slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([[0-9]+))?)?$")
+		slurmMatch := slurmPattern.FindStringSubmatch(name)
+		level.Debug(logger).Log("msg", "Got for match", "name", name, "len(slurmMatch)", len(slurmMatch), "slurmMatch", fmt.Sprintf("%v", slurmMatch))
+		if len(slurmMatch) >= 3 {
+			metric.job = true
+			metric.uid, err = strconv.Atoi(slurmMatch[1])
+			if err != nil {
+				level.Error(logger).Log("msg", "Error getting slurm uid number", "uid", name, "err", err)
+			}
+			metric.jobid = slurmMatch[2]
+			metric.step = slurmMatch[4]
+			metric.task = slurmMatch[6]
+			/*
+				user, err := user.LookupId(slurmMatch[1])
+					if err == nil {
+						metric.username = user.Username
+					} */
+			return
 		}
-		metric.jobid = slurmMatch[2]
-		metric.step = slurmMatch[4]
-		metric.task = slurmMatch[6]
-		/*
-			user, err := user.LookupId(slurmMatch[1])
-				if err == nil {
-					metric.username = user.Username
-				} */
-		return
 	}
 	if strings.HasPrefix(name, "/torque") {
 		metric.job = true
 		pathBaseSplit := strings.Split(pathBase, ".")
 		metric.jobid = pathBaseSplit[0]
+		return
+	}
+	if strings.HasPrefix(name, "/pbspro") {
+		metric.job = true
+		// e.g. /sys/fs/cgroup/memory/pbspro.service/jobid/27138999.servername
+		pbsPattern := regexp.MustCompile("^/pbspro.service/jobid/([0-9]+).*")
+		pbsMatch := pbsPattern.FindStringSubmatch(name)
+		level.Debug(logger).Log("msg", "Got for match", "name", name, "len(pbsMatch)", len(pbsMatch), "pbsMatch", fmt.Sprintf("%v", pbsMatch))
+		if len(pbsMatch) >= 2 {
+			metric.job = true
+			metric.jobid = pbsMatch[1]
+		}
 		return
 	}
 }
