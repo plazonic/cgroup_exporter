@@ -191,7 +191,9 @@ func getInfo(name string, metric *CgroupMetric, logger log.Logger) {
 				} */
 		return
 	}
-	slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([[0-9]+))?)?$")
+	// slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([[0-9]+))?)?$")
+	slurmPattern := regexp.MustCompile(`^/(?:slurm|slurm_[^/]+)/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([[0-9]+))?)?$`)
+
 	slurmMatch := slurmPattern.FindStringSubmatch(name)
 	level.Debug(logger).Log("msg", "Got for match", "name", name, "len(slurmMatch)", len(slurmMatch), "slurmMatch", fmt.Sprintf("%v", slurmMatch))
 	if len(slurmMatch) >= 3 {
