@@ -9,7 +9,7 @@
 
 The `cgroup_exporter` produces metrics from cgroups.
 
-This is a modified version of https://github.com/treydock/cgroup_exporter tuned to work better for slurm cgroups v1. For cgroups v2 please check the [cgroupv2 branch](https://github.com/plazonic/cgroup_exporter/tree/cgroupv2).
+This is a modified version of https://github.com/treydock/cgroup_exporter tuned to work for slurm use. Both cgroupv1 and cgroupv2 work with this version and there is no longer any need to use the cgroupv2 branch.
 
 This exporter by default listens on port `9306` and all metrics are exposed via the `/metrics` endpoint.
 
