@@ -12,10 +12,21 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Creates two distinct parallel jobs: one for AMD64, one for ARM64
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+    name: Build for ${{ matrix.arch }}
 
     outputs:
-      arch: ${{ runner.arch }}
+      arch: ${{ matrix.arch }}
 
     steps:
     - name: Checkout code
@@ -32,7 +43,7 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: cgroup_exporter-${{ env.VERSION }}-${{ runner.arch }}
+        name: cgroup_exporter-${{ env.VERSION }}-${{ matrix.arch }}
         path: cgroup_exporter
 
   release:
@@ -47,17 +58,12 @@ jobs:
 
     - name: Download artifact
       uses: actions/download-artifact@v8
-      with:
-        name: cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}
 
     - name: Make artifact executable
-      run: chmod +x cgroup_exporter
-
-    - name: Rename executable
-      run: mv cgroup_exporter cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}
+      run: chmod +x cgroup_exporter*
 
     - name: Create tar archive
-      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}
+      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz cgroup_exporter*
       
     - name: Create Release
       id: create_release
