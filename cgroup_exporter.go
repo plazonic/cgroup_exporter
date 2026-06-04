@@ -219,14 +219,19 @@ func getInfoV2(name string, metric *CgroupMetric, logger log.Logger) {
 	metric.uid = -1
 	// nor is there a userslice
 	metric.userslice = false
-	slurmPattern := regexp.MustCompile("^" + *slurmScope + "/job_([0-9]+)(/step_([^/]+)(/user/task_([0-9]+|special))?)?$")
+	slurmPattern := regexp.MustCompile("^" + *slurmScope + "/(job_([0-9]+)|(s[0-9A-Z]{13}))(/step_([^/]+)(/user/task_([0-9]+|special))?)?$")
 	slurmMatch := slurmPattern.FindStringSubmatch(name)
 	level.Debug(logger).Log("msg", "Got for match", "name", name, "len(slurmMatch)", len(slurmMatch), "slurmMatch", fmt.Sprintf("%v", slurmMatch))
-	if len(slurmMatch) == 6 {
+	if len(slurmMatch) == 8 {
 		metric.job = true
-		metric.jobid = slurmMatch[1]
-		metric.step = slurmMatch[3]
-		metric.task = slurmMatch[5]
+		if slurmMatch[2] != "" {
+			metric.jobid = slurmMatch[2]
+		} else {
+			metric.jobid = slurmMatch[3]
+		}
+		metric.step = slurmMatch[5]
+		metric.task = slurmMatch[7]
+		level.Debug(logger).Log("msg", "Got for", "jobid", metric.jobid, "step", metric.step, "task", metric.task)
 	}
 }
 
@@ -400,6 +405,7 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 	var metrics = make(map[string]CgroupMetric)
 	var topPath string
 	var fullPath string
+	var jobMatch = regexp.MustCompile("/(job_[0-9]+|s[0-9A-Z]{13})($|/)")
 	if cgroupV2 {
 		topPath = *cgroupRoot
 		fullPath = topPath + *slurmScope
@@ -412,7 +418,7 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && strings.Contains(p, "/job_") && !strings.HasSuffix(p, "/slurm") && !strings.HasSuffix(p, "/user") {
+		if info.IsDir() && jobMatch.MatchString(p) && !strings.HasSuffix(p, "/slurm") && !strings.HasSuffix(p, "/user") {
 			if !*collectFullSlurm && strings.Contains(p, "/step_") {
 				return nil
 			}
