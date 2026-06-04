@@ -58,12 +58,15 @@ jobs:
 
     - name: Download artifact
       uses: actions/download-artifact@v8
+      with:
+        pattern: cgroup_exporter-${{ env.VERSION }}*
+        merge-multiple: true
 
     - name: Make artifact executable
-      run: chmod +x cgroup_exporter*
+      run: chmod +x cgroup_exporter-${{ env.VERSION }}*
 
     - name: Create tar archive
-      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz cgroup_exporter*
+      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-binaries.tar.gz cgroup_exporter-${{ env.VERSION }}*
       
     - name: Create Release
       id: create_release
@@ -71,7 +74,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz
+        files: cgroup_exporter-${{ env.VERSION }}-binaries.tar.gz
         tag_name: ${{ env.VERSION }}
         name: Release ${{ env.VERSION }}
         prerelease: false
