@@ -1,0 +1,85 @@
+name: Build and Release
+
+env:
+  VERSION: "v0.3.1"
+
+on:
+  push:
+    branches:
+      - master
+#    tags:
+#      - 'v*' # Triggers on any tag starting with 'v'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      arch: ${{ steps.get_arch.outputs.arch }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Get architecture
+      id: get_arch
+      run: echo "::set-output name=arch::$(uname -m)"
+
+    - name: Build
+      run: go build -o cgroup_exporter
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cgroup_exporter-${{ env.VERSION }}-${{ steps.get_arch.outputs.arch }}
+        path: cgroup_exporter
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+        contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}
+
+    - name: Make artifact executable
+      run: chmod +x cgroup_exporter
+
+    - name: Rename executable
+      run: mv cgroup_exporter cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}
+
+    - name: Create tar archive
+      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}
+      
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.VERSION }}
+        release_name: Release ${{ env.VERSION }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz
+        asset_name: cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz
+        asset_content_type: application/octet-stream
