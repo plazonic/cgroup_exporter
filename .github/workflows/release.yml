@@ -1,14 +1,9 @@
 name: Build and Release
 
-env:
-  VERSION: "v0.3.1"
-
 on:
   push:
-    branches:
-      - master
-#    tags:
-#      - 'v*' # Triggers on any tag starting with 'v'
+    tags:
+      - 'v*' # Triggers on any tag starting with 'v'
 
 jobs:
   build:
@@ -46,7 +41,7 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: cgroup_exporter-${{ env.VERSION }}-${{ matrix.arch }}
+        name: cgroup_exporter-${{ github.ref_name }}-${{ matrix.arch }}
         path: cgroup_exporter-${{ matrix.arch }}
         retention-days: 1
 
@@ -70,7 +65,7 @@ jobs:
       run: chmod +x cgroup_exporter-*
 
     - name: Create tar archive
-      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-binaries.tar.gz cgroup_exporter-*
+      run: tar -czvf cgroup_exporter-${{ github.ref_name }}-binaries.tar.gz cgroup_exporter-*
       
     - name: Create Release
       id: create_release
@@ -78,7 +73,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: cgroup_exporter-${{ env.VERSION }}-binaries.tar.gz
-        tag_name: ${{ env.VERSION }}
-        name: Release ${{ env.VERSION }}
+        files: cgroup_exporter-${{ github.ref_name }}-binaries.tar.gz
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
         prerelease: false
