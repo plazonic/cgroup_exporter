@@ -15,28 +15,24 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      arch: ${{ steps.get_arch.outputs.arch }}
+      arch: ${{ runner.arch }}
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version: '1.21'
-
-    - name: Get architecture
-      id: get_arch
-      run: echo "::set-output name=arch::$(uname -m)"
 
     - name: Build
       run: go build -o cgroup_exporter
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
-        name: cgroup_exporter-${{ env.VERSION }}-${{ steps.get_arch.outputs.arch }}
+        name: cgroup_exporter-${{ env.VERSION }}-${{ runner.arch }}
         path: cgroup_exporter
 
   release:
@@ -65,21 +61,11 @@ jobs:
       
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
+      uses: softprops/action-gh-release@v3
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
+        files: cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz
         tag_name: ${{ env.VERSION }}
-        release_name: Release ${{ env.VERSION }}
-        draft: false
+        name: Release ${{ env.VERSION }}
         prerelease: false
-
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz
-        asset_name: cgroup_exporter-${{ env.VERSION }}-${{ needs.build.outputs.arch }}.tar.gz
-        asset_content_type: application/octet-stream
