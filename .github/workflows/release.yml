@@ -40,11 +40,15 @@ jobs:
     - name: Build
       run: go build -o cgroup_exporter
 
+    - name: Rename
+      run: mv cgroup_exporter cgroup_exporter-${{ matrix.arch }}
+
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
         name: cgroup_exporter-${{ env.VERSION }}-${{ matrix.arch }}
-        path: cgroup_exporter
+        path: cgroup_exporter-${{ matrix.arch }}
+        retention-days: 1
 
   release:
     runs-on: ubuntu-latest
@@ -59,14 +63,14 @@ jobs:
     - name: Download artifact
       uses: actions/download-artifact@v8
       with:
-        pattern: cgroup_exporter-${{ env.VERSION }}*
+        pattern: cgroup_exporter-*
         merge-multiple: true
 
     - name: Make artifact executable
-      run: chmod +x cgroup_exporter-${{ env.VERSION }}*
+      run: chmod +x cgroup_exporter-*
 
     - name: Create tar archive
-      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-binaries.tar.gz cgroup_exporter-${{ env.VERSION }}*
+      run: tar -czvf cgroup_exporter-${{ env.VERSION }}-binaries.tar.gz cgroup_exporter-*
       
     - name: Create Release
       id: create_release
