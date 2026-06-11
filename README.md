@@ -15,17 +15,18 @@ This exporter by default listens on port `9306` and all metrics are exposed via 
 
 # Usage
 
-## Install
+## Install from source
 
 Clone the [repo](https://github.com/plazonic/cgroup_exporter)
-
-## Build from source
 
 To produce the `cgroup_exporter` binaries:
 
 ```
 go build
 ```
+
+## Use github prebuilt-binaries
+Alternatively, download from [github](https://github.com/plazonic/cgroup_exporter/releases/)
 
 ## Process metrics
 
