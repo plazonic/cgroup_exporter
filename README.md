@@ -15,8 +15,6 @@ This exporter by default listens on port `9306` and all metrics are exposed via 
 
 # Usage
 
-The `--config.paths` flag is required and must point to paths of cgroups to monitor. If there is `/sys/fs/cgroup/cpuacct/user.slice` then the value for `--config.paths` would be `/user.slice`.
-
 ## Install
 
 Clone the [repo](https://github.com/plazonic/cgroup_exporter)
