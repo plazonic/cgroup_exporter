@@ -61,6 +61,7 @@ type CgroupMetric struct {
 	cpu_list        string
 	memoryRSS       float64
 	memoryCache     float64
+	memoryShmem     float64
 	memoryUsed      float64
 	memoryTotal     float64
 	memoryFailCount float64
@@ -87,6 +88,7 @@ type Exporter struct {
 	cpu_info        *prometheus.Desc
 	memoryRSS       *prometheus.Desc
 	memoryCache     *prometheus.Desc
+	memoryShmem     *prometheus.Desc
 	memoryUsed      *prometheus.Desc
 	memoryTotal     *prometheus.Desc
 	memoryFailCount *prometheus.Desc
@@ -253,6 +255,8 @@ func NewExporter(logger log.Logger, getMetrics func(log.Logger, string) (CgroupM
 			"Memory RSS used in bytes", []string{"jobid", "step", "task"}, nil),
 		memoryCache: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "cache_bytes"),
 			"Memory cache used in bytes", []string{"jobid", "step", "task"}, nil),
+		memoryShmem: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "shmem_bytes"),
+			"Memory cache used in bytes", []string{"jobid", "step", "task"}, nil),
 		memoryUsed: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "used_bytes"),
 			"Memory used in bytes", []string{"jobid", "step", "task"}, nil),
 		memoryTotal: prometheus.NewDesc(prometheus.BuildFQName(namespace, "memory", "total_bytes"),
@@ -387,6 +391,7 @@ func getMetricsV2(logger log.Logger, name string) (CgroupMetric, error) {
 	metric.memoryRSS = getOneMetric(logger, name, "memory.stat.anon", true, data) + getOneMetric(logger, name, "memory.stat.swapcached", false, data)
 	// I guess?
 	metric.memoryCache = getOneMetric(logger, name, "memory.stat.file", true, data)
+	metric.memoryShmem = getOneMetric(logger, name, "memory.stat.shmem", true, data)
 	metric.memoryUsed = getOneMetric(logger, name, "memory.current", true, data)
 	metric.memoryTotal = getOneMetric(logger, name, "memory.max", true, data)
 	metric.memswUsed = 0.0
@@ -476,6 +481,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.cpu_info
 	ch <- e.memoryRSS
 	ch <- e.memoryCache
+	ch <- e.memoryShmem
 	ch <- e.memoryUsed
 	ch <- e.memoryTotal
 	ch <- e.memoryFailCount
@@ -508,6 +514,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		//ch <- prometheus.MustNewConstMetric(e.cpu_info, prometheus.GaugeValue, 1, m.name, m.cpu_list, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryRSS, prometheus.GaugeValue, m.memoryRSS, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryCache, prometheus.GaugeValue, m.memoryCache, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.memoryShmem, prometheus.GaugeValue, m.memoryShmem, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryUsed, prometheus.GaugeValue, m.memoryUsed, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryTotal, prometheus.GaugeValue, m.memoryTotal, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.memoryFailCount, prometheus.GaugeValue, m.memoryFailCount, m.jobid, m.step, m.task)
