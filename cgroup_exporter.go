@@ -309,6 +309,8 @@ func getMetricsV1(logger log.Logger, name string) (CgroupMetric, error) {
 			metric.memoryUsed = float64(stats.Memory.Usage.Usage)
 			metric.memoryTotal = float64(stats.Memory.Usage.Limit)
 			metric.memoryFailCount = float64(stats.Memory.Usage.Failcnt)
+			// containerd's cgroup does not collect shmem so calculate it from cache
+			metric.memoryShmem = float64(stats.Memory.TotalCache - stats.Memory.TotalInactiveFile - stats.Memory.TotalActiveFile)
 		}
 		if stats.Memory.Swap != nil {
 			metric.memswUsed = float64(stats.Memory.Swap.Usage)
