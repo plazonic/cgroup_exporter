@@ -17,12 +17,14 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/containerd/cgroups/v3/cgroup1"
@@ -71,7 +73,7 @@ type CgroupMetric struct {
 	userslice       bool
 	job             bool
 	uid             int
-	//	username        string
+	username        string
 	jobid string
 	step  string
 	task  string
@@ -183,6 +185,72 @@ func parseCpuSet(cpuset string) ([]string, error) {
 	return cpus, nil
 }
 
+func collectLivePids(rootPath string) []int {
+	var pids []int
+	_ = filepath.Walk(rootPath, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Base(p) != "cgroup.procs" {
+			return nil
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line == "" {
+				continue
+			}
+			if pid, perr := strconv.Atoi(line); perr == nil {
+				pids = append(pids, pid)
+			}
+		}
+		return nil
+	})
+	return pids
+}
+
+func resolveUidFromCgroupTree(rootPath string, logger log.Logger) (int, error) {
+	pids := collectLivePids(rootPath)
+	if len(pids) == 0 {
+		return -1, fmt.Errorf("no live pid found under %s", rootPath)
+	}
+	fallbackUid := -1
+	for _, pid := range pids {
+		fi, serr := os.Stat(fmt.Sprintf("/proc/%d", pid))
+		if serr != nil {
+			continue
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
+		fallbackUid = int(st.Uid)
+		exe, eerr := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+		if eerr != nil {
+			continue
+		}
+		base := filepath.Base(exe)
+		if base != "sleep" && base != "slurmstepd" {
+			return fallbackUid, nil
+		}
+	}
+	if fallbackUid >= 0 {
+		return fallbackUid, nil
+	}
+	return -1, fmt.Errorf("no resolvable pid under %s", rootPath)
+}
+
+func resolveUsername(metric *CgroupMetric, logger log.Logger) {
+	if metric.uid < 0 {
+		return
+	}
+	u, err := user.LookupId(strconv.Itoa(metric.uid))
+	if err != nil {
+		level.Debug(logger).Log("msg", "Could not resolve username for uid", "uid", metric.uid, "err", err)
+		return
+	}
+	metric.username = u.Username
+}
+
 func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 	var err error
 	pathBase := filepath.Base(name)
@@ -194,6 +262,7 @@ func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 		if err != nil {
 			level.Error(logger).Log("msg", "Error getting slurm uid number", "uid", pathBase, "err", err)
 		}
+		resolveUsername(metric, logger)
 		return
 	}
 	slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([0-9]+|special))?)?$")
@@ -208,6 +277,7 @@ func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 		metric.jobid = slurmMatch[2]
 		metric.step = slurmMatch[4]
 		metric.task = slurmMatch[6]
+		resolveUsername(metric, logger)
 		return
 	}
 }
@@ -233,6 +303,13 @@ func getInfoV2(name string, metric *CgroupMetric, logger log.Logger) {
 		}
 		metric.step = slurmMatch[5]
 		metric.task = slurmMatch[7]
+		jobDir := filepath.Join(*cgroupRoot, name)
+		if uid, err := resolveUidFromCgroupTree(jobDir, logger); err == nil {
+			metric.uid = uid
+		} else {
+			level.Debug(logger).Log("msg", "Could not resolve uid under cgroup tree", "path", jobDir, "err", err)
+		}
+		resolveUsername(metric, logger)
 		level.Debug(logger).Log("msg", "Got for", "jobid", metric.jobid, "step", metric.step, "task", metric.task)
 	}
 }
@@ -241,6 +318,8 @@ func NewExporter(logger log.Logger, getMetrics func(log.Logger, string) (CgroupM
 	return &Exporter{
 		uid: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "uid"),
 			"Uid number of user running this job", []string{"jobid"}, nil),
+		info: prometheus.NewDesc(prometheus.BuildFQName(namespace, "", "info"),
+			"Static info about the job: owning uid and username, resolved via /proc + NSS", []string{"jobid", "uid", "username"}, nil),
 		cpuUser: prometheus.NewDesc(prometheus.BuildFQName(namespace, "cpu", "user_seconds"),
 			"Cumulative CPU user seconds for jobid", []string{"jobid", "step", "task"}, nil),
 		cpuSystem: prometheus.NewDesc(prometheus.BuildFQName(namespace, "cpu", "system_seconds"),
@@ -478,6 +557,7 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.cpuUser
 	ch <- e.cpuSystem
+	ch <- e.info
 	ch <- e.cpuTotal
 	ch <- e.cpus
 	ch <- e.cpu_info
@@ -500,6 +580,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		}
 		if m.step == "" && m.task == "" {
 			ch <- prometheus.MustNewConstMetric(e.uid, prometheus.GaugeValue, float64(m.uid), m.jobid)
+			ch <- prometheus.MustNewConstMetric(e.info, prometheus.GaugeValue, 1, m.jobid, strconv.Itoa(m.uid), m.username)
 		}
 		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.jobid, m.step, m.task)
