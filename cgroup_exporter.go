@@ -501,9 +501,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		if m.step == "" && m.task == "" {
 			ch <- prometheus.MustNewConstMetric(e.uid, prometheus.GaugeValue, float64(m.uid), m.jobid)
 		}
-		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.jobid, m.step, m.task)
-		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.jobid, m.step, m.task)
-		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.GaugeValue, m.cpuTotal, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.CounterValue, m.cpuUser, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.CounterValue, m.cpuSystem, m.jobid, m.step, m.task)
+		ch <- prometheus.MustNewConstMetric(e.cpuTotal, prometheus.CounterValue, m.cpuTotal, m.jobid, m.step, m.task)
 		cpus := m.cpus
 		if cpus == 0 {
 			dir := filepath.Dir(n)
