@@ -50,6 +50,7 @@ var (
 	cgroupRoot             = kingpin.Flag("path.cgroup.root", "Root path to cgroup fs").Default(defCgroupRoot).String()
 	slurmScope             = kingpin.Flag("path.slurmstepd.scope", "Relative path to slurm cgroupv2 subdir").Default(defSlurmScope).String()
 	collectFullSlurm       = kingpin.Flag("collect.fullslurm", "Boolean that sets if to collect all slurm steps and tasks").Default("false").Bool()
+	collectUsername        = kingpin.Flag("collect.username", "Boolean that sets if to resolve and export uid/username per job (adds /proc parsing on cgroup v2 and an NSS lookup per job)").Default("false").Bool()
 	cgroupV2               = false
 	metricLock             = sync.RWMutex{}
 )
@@ -262,7 +263,9 @@ func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 		if err != nil {
 			level.Error(logger).Log("msg", "Error getting slurm uid number", "uid", pathBase, "err", err)
 		}
-		resolveUsername(metric, logger)
+		if *collectUsername {
+			resolveUsername(metric, logger)
+		}
 		return
 	}
 	slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([0-9]+|special))?)?$")
@@ -277,7 +280,9 @@ func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 		metric.jobid = slurmMatch[2]
 		metric.step = slurmMatch[4]
 		metric.task = slurmMatch[6]
-		resolveUsername(metric, logger)
+		if *collectUsername {
+			resolveUsername(metric, logger)
+		}
 		return
 	}
 }
@@ -303,13 +308,15 @@ func getInfoV2(name string, metric *CgroupMetric, logger log.Logger) {
 		}
 		metric.step = slurmMatch[5]
 		metric.task = slurmMatch[7]
-		jobDir := filepath.Join(*cgroupRoot, name)
-		if uid, err := resolveUidFromCgroupTree(jobDir, logger); err == nil {
-			metric.uid = uid
-		} else {
-			level.Debug(logger).Log("msg", "Could not resolve uid under cgroup tree", "path", jobDir, "err", err)
+		if *collectUsername {
+			jobDir := filepath.Join(*cgroupRoot, name)
+			if uid, err := resolveUidFromCgroupTree(jobDir, logger); err == nil {
+				metric.uid = uid
+			} else {
+				level.Debug(logger).Log("msg", "Could not resolve uid under cgroup tree", "path", jobDir, "err", err)
+			}
+			resolveUsername(metric, logger)
 		}
-		resolveUsername(metric, logger)
 		level.Debug(logger).Log("msg", "Got for", "jobid", metric.jobid, "step", metric.step, "task", metric.task)
 	}
 }
@@ -580,7 +587,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		}
 		if m.step == "" && m.task == "" {
 			ch <- prometheus.MustNewConstMetric(e.uid, prometheus.GaugeValue, float64(m.uid), m.jobid)
-			ch <- prometheus.MustNewConstMetric(e.info, prometheus.GaugeValue, 1, m.jobid, strconv.Itoa(m.uid), m.username)
+			if *collectUsername {
+				ch <- prometheus.MustNewConstMetric(e.info, prometheus.GaugeValue, 1, m.jobid, strconv.Itoa(m.uid), m.username)
+			}
 		}
 		ch <- prometheus.MustNewConstMetric(e.cpuUser, prometheus.GaugeValue, m.cpuUser, m.jobid, m.step, m.task)
 		ch <- prometheus.MustNewConstMetric(e.cpuSystem, prometheus.GaugeValue, m.cpuSystem, m.jobid, m.step, m.task)
