@@ -45,9 +45,11 @@ const (
 var (
 	defCgroupRoot          = "/sys/fs/cgroup"
 	defSlurmScope          = "/system.slice/slurmstepd.scope"
+	defSlurmOneScope       = "/slurm"
 	listenAddress          = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9306").String()
 	disableExporterMetrics = kingpin.Flag("web.disable-exporter-metrics", "Exclude metrics about the exporter (promhttp_*, process_*, go_*)").Default("false").Bool()
 	cgroupRoot             = kingpin.Flag("path.cgroup.root", "Root path to cgroup fs").Default(defCgroupRoot).String()
+	slurmOneScope          = kingpin.Flag("path.slurm.scope", "Relative path to slurm cgroupv1 subdir").Default(defSlurmOneScope).String()
 	slurmScope             = kingpin.Flag("path.slurmstepd.scope", "Relative path to slurm cgroupv2 subdir").Default(defSlurmScope).String()
 	collectFullSlurm       = kingpin.Flag("collect.fullslurm", "Boolean that sets if to collect all slurm steps and tasks").Default("false").Bool()
 	collectUsername        = kingpin.Flag("collect.username", "Boolean that sets if to resolve and export uid/username per job (adds /proc parsing on cgroup v2 and an NSS lookup per job)").Default("false").Bool()
@@ -75,10 +77,10 @@ type CgroupMetric struct {
 	job             bool
 	uid             int
 	username        string
-	jobid string
-	step  string
-	task  string
-	err   bool
+	jobid           string
+	step            string
+	task            string
+	err             bool
 }
 
 type Exporter struct {
@@ -268,7 +270,7 @@ func getInfoV1(name string, metric *CgroupMetric, logger log.Logger) {
 		}
 		return
 	}
-	slurmPattern := regexp.MustCompile("^/slurm/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([0-9]+|special))?)?$")
+	slurmPattern := regexp.MustCompile("^" + *slurmOneScope + "/uid_([0-9]+)/job_([0-9]+)(/step_([^/]+)(/task_([0-9]+|special))?)?$")
 	slurmMatch := slurmPattern.FindStringSubmatch(name)
 	level.Debug(logger).Log("msg", "Got for match", "name", name, "len(slurmMatch)", len(slurmMatch), "slurmMatch", fmt.Sprintf("%v", slurmMatch))
 	if len(slurmMatch) >= 3 {
@@ -504,7 +506,7 @@ func (e *Exporter) collect() (map[string]CgroupMetric, error) {
 		fullPath = topPath + *slurmScope
 	} else {
 		topPath = *cgroupRoot + "/cpuacct"
-		fullPath = topPath + "/slurm"
+		fullPath = topPath + *slurmOneScope
 	}
 	level.Debug(e.logger).Log("msg", "Loading cgroup", "path", fullPath)
 	err := filepath.Walk(fullPath, func(p string, info os.FileInfo, err error) error {
